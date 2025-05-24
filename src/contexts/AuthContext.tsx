@@ -5,21 +5,15 @@ import {
   ReactNode,
   useEffect,
 } from 'react';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'parent' | 'child';
-  subscription: 'free' | 'basic' | 'premium' | null;
-}
+import { supabase } from '../lib/supabase';
+import { User } from '@supabase/supabase-js';
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -35,90 +29,54 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
 
-  // Save token in localStorage
-  const saveToken = (token: string) => {
-    localStorage.setItem('authToken', token);
-  };
-
-  // Get token from localStorage
-  const getToken = () => localStorage.getItem('authToken');
-
-  // Remove token from localStorage
-  const removeToken = () => {
-    localStorage.removeItem('authToken');
-  };
-
-  // Fetch user info from backend using token (for auto-login)
-  const fetchUserFromToken = async (token: string) => {
-    try {
-      const response = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        removeToken();
-        setUser(null);
-        return;
-      }
-
-      const data = await response.json();
-      setUser(data.user);
-    } catch {
-      removeToken();
-      setUser(null);
-    }
-  };
-
-  // Auto login on mount if token exists
   useEffect(() => {
-    const token = getToken();
-    if (token) {
-      fetchUserFromToken(token);
-    }
+    // Set up auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    // Check current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, password: string) => {
-    const response = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Login failed');
+    if (error) {
+      throw new Error(error.message);
     }
-
-    const data = await response.json();
-
-    // Save token for future auth
-    saveToken(data.token);
-    setUser(data.user);
   };
 
   const register = async (name: string, email: string, password: string) => {
-    const response = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+    const { error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name,
+        },
+      },
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Registration failed');
+    if (signUpError) {
+      throw new Error(signUpError.message);
     }
-
-    const data = await response.json();
-
-    // Save token for future auth
-    saveToken(data.token);
-    setUser(data.user);
   };
 
-  const logout = () => {
-    // Optionally notify backend logout if using sessions
-    removeToken();
-    setUser(null);
+  const logout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      throw new Error(error.message);
+    }
   };
 
   return (
